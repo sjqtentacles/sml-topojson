@@ -1,0 +1,10 @@
+(* Source files for sml-geo, in dependency order. Pulls in the vendored
+   sml-json sources (JSON AST + parser + serializer) which in turn bring
+   in sml-parsec. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+../sml-json/src/json.mlb
+
+geo.sig
+geo.sml

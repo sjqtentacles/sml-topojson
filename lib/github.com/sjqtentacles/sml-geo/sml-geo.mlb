@@ -1,0 +1,7 @@
+(* sml-geo: public library basis. Re-exports the vendored sml-json plus
+   the geo sources, so a consumer gets the GeoJson, GeoJsonParser,
+   GeoJsonSerializer, and GeoJsonBbox structures. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+sources.mlb
