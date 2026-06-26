@@ -2,35 +2,84 @@
 
 [![CI](https://github.com/sjqtentacles/sml-topojson/actions/workflows/ci.yml/badge.svg)](https://github.com/sjqtentacles/sml-topojson/actions/workflows/ci.yml)
 
-A minimal [TopoJSON](https://github.com/topojson/topojson-specification)-style
-**coordinate quantization** for Standard ML. It converts a GeoJSON point into a
-quantized TopoJSON object (integer grid coordinates plus a `transform`) and
-back, demonstrating the lossy fixed-precision encoding TopoJSON uses to shrink
-coordinates.
+A [TopoJSON](https://github.com/topojson/topojson-specification)-style
+**coordinate quantization and topology toolkit** for Standard ML. It implements
+the core encoding TopoJSON uses to shrink geometry: a quantizing `transform`
+(scale + translate), delta-encoded arcs, line/polygon encode/decode, and
+shared-arc deduplication.
+
+It operates on the in-memory `topo` record (no JSON text parsing — pair it with
+`sml-json`/`sml-geo` for that).
 
 ## API
 
 ```sml
-type topo = { transform : (real * real) option
-            , arcs : (real * real) list list }
+type point     = real * real
+type transform = { scale : real * real, translate : real * real }
+type topo      = { transform : transform option, arcs : (real * real) list list }
 
-Topojson.fromGeoJsonPoint [lon, lon]   (* quantize -> topo with transform *)
-Topojson.toGeoJsonPoint topo (qx, qy)  (* dequantize using the transform *)
+(* transforms: q -> real and real -> q *)
+val applyTransform   : transform -> (real * real) -> point
+val untransform      : transform -> point -> (real * real)
+val computeTransform : { min : point, max : point } -> int -> transform
+
+(* arc delta-encoding *)
+val quantizeArc   : (real * real) list -> (real * real) list  (* abs -> deltas *)
+val dequantizeArc : (real * real) list -> (real * real) list  (* deltas -> abs *)
+
+(* geometry *)
+val fromGeoJsonPoint   : real list -> topo
+val toGeoJsonPoint     : topo -> (real * real) -> real list
+val fromGeoJsonLine    : int -> real list list -> topo
+val toGeoJsonLine      : topo -> real list list
+val fromGeoJsonPolygon : int -> real list list list -> topo
+val toGeoJsonPolygon   : topo -> real list list list
+
+(* shared-arc dedup *)
+val extractArcs : (real*real) list list -> (real*real) list list * int list list
+val reconstruct : (real*real) list list * int list list -> (real*real) list list
 ```
 
-`fromGeoJsonPoint` divides each coordinate by a fixed `step` (1e-6) and rounds
-to the nearest integer; the resulting `transform = SOME (step, step)` records
-the scale so `toGeoJsonPoint` can recover the original coordinate by multiplying
-back. The round-trip is exact to the quantization grid.
+## How it works
+
+TopoJSON stores coordinates as small integers on a grid. A real point `(x,y)`
+is recovered from a quantized integer point `q` by
+
+```
+x = q_x * scaleX + translateX
+y = q_y * scaleY + translateY
+```
+
+`computeTransform {min,max} q` derives that transform from a bounding box and a
+quantum `q` (number of grid steps per axis): `scale = (max-min)/(q-1)`,
+`translate = min`. Arcs are then **delta-encoded** — the first point is
+absolute and the rest are deltas — which keeps the integers tiny for dense
+lines.
+
+```sml
+val line  = [[0.0,0.0],[1.0,1.0],[2.0,0.0],[3.0,3.0]]
+val topo  = TopoJson.fromGeoJsonLine 1001 line   (* one delta-encoded arc *)
+val back  = TopoJson.toGeoJsonLine topo          (* ~= line, to grid precision *)
+```
+
+Shared-arc deduplication collapses identical geometry so it is stored once:
+
+```sml
+val (arcs, idx) = TopoJson.extractArcs [shared, other, shared]
+(* arcs has 2 entries; idx = [[0],[1],[0]] — line 0 and 2 share arc 0 *)
+val lines = TopoJson.reconstruct (arcs, idx)
+```
 
 ## Scope and limitations
 
-- **Points only.** This handles single points (one-element arcs). It does not
-  implement arc delta-encoding, line/polygon topology, shared-arc extraction, or
-  the full TopoJSON object model.
-- Quantization is **lossy**: coordinates are snapped to a 1e-6 grid (~0.1 m at
-  the equator). Values below the grid resolution are not recoverable.
-- No JSON serialization — this operates on the in-memory `topo` record.
+- Quantization is **lossy**: coordinates snap to the grid implied by the
+  transform. Round-trips are exact only to grid precision.
+- `extractArcs` dedups whole arcs by exact equality; it does not split arcs at
+  shared sub-paths (the full spec's junction-cutting) — only identical arcs are
+  shared.
+- `fromGeoJsonPoint` keeps the legacy fixed 1e-6 grid for single points; line
+  and polygon helpers compute a transform from the data's bounding box.
+- No JSON serialization — this is the in-memory topology layer.
 
 ## Installing with smlpkg
 
@@ -61,10 +110,10 @@ sml.pkg
 Makefile
 lib/github.com/sjqtentacles/sml-topojson/
   topojson.sig
-  topojson.sml   quantize / dequantize through a transform
+  topojson.sml   transform, delta arcs, line/polygon, shared-arc dedup
   topojson.mlb
 test/
-  test.sml       transform capture, integral storage, round-trip
+  test.sml       transform round-trip, arc deltas, line+polygon, dedup
 ```
 
 ## License
